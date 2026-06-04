@@ -1,2 +1,12 @@
-**/*__pycache__
-results/
+# Python 缓存（任意目录下）
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter 检查点（任意目录下）
+.ipynb_checkpoints/
+
+# 编辑器配置
+.vscode/
+
+data/

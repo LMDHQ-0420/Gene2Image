@@ -1,0 +1,19 @@
+RNA-GAN / RNA-CDM: bulk RNA-seq → 病理图像 tile 生成
+[摘要来源：web_search —— ⚠️ 低置信度：仅摘要]
+
+RNA-GAN
+Venue: 论文 "Synthetic whole-slide image tile generation with gene expression
+profile-infused deep generative models" (PMC10475789, 2023)
+- 先训练 VAE 对 RNA-seq 降维，用基因表达的潜表示作为输入，GAN 生成健康肺/脑皮层
+  组织的 WSI tile。
+- 灵感来自文本到图像（DALL-E 2 等），把 RNA-seq 当作"prior text"。
+- 局限：基于 bulk RNA-seq，缺乏单细胞分辨率与空间结构建模；生成 tile 有 checkerboard 伪影。
+
+RNA-CDM
+- 级联扩散框架，条件于 bulk RNA-seq 生成合成 H&E tile。
+- 用 β-VAE 编码高维基因表达到潜空间引导扩散，保留肿瘤-免疫细胞组成。
+- 局限：仍基于 bulk RNA-seq，缺空间与单细胞分辨率。
+
+与 Gene2Image 的关系：
+- 同任务（基因→病理图像）的 GAN/扩散前驱，GeneFlow 的主要对照。
+- Gene2Image 继承 GeneFlow 的单细胞+空间+整流流优势，并在 RNA 编码器引入通路结构。

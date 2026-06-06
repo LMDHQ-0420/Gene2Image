@@ -1,0 +1,24 @@
+TOSICA: Transformer for one-stop interpretable cell type annotation
+Venue: Nature Communications, 2023 (Chen et al.)
+[摘要来源：web_search，无 arXiv/OpenReview PDF 可用 —— ⚠️ 低置信度：PDF 不可用，仅摘要]
+
+核心：基于多头自注意力的 Transformer 深度学习模型，用生物可理解实体（通路 / regulon）
+做可解释的细胞类型注释。
+
+关键架构（与 Gene2Image 高度相关）：
+- 将基因表达通过 mask 映射为"通路 token"（pathway tokens / signature tokens）。
+- 加入一个 cell-type classifier token（CLS token），与通路 token 一起输入 Transformer。
+- 计算 CLS token 与各通路 token 之间的注意力分数，作为 cell 的 "attention embedding"。
+- 注意力分数可回溯到原始输入特征（不做降维），因此可解释——可分析哪些通路对
+  细胞状态贡献最大。
+- 在肿瘤浸润免疫细胞、COVID-19 CD14+ 单核细胞 scRNA-seq 上验证，揭示稀有细胞类型、
+  异质性与疾病进展轨迹。
+
+与 Gene2Image 的关系（须界定区别）：
+- 相同点：通路 token + 多头自注意力 + CLS token 聚合为细胞嵌入（≈ 步骤 2.2-2.3）。
+- 不同点：
+  (1) TOSICA 用于"分类/注释"判别任务；Gene2Image 用于"生成"任务（条件图像生成）。
+  (2) TOSICA 的通路 token 生成方式偏固定签名映射；Gene2Image 为每个 (通路,基因) 对
+      引入可学习的 D_token 维权重向量，端到端学习，等效隐式特征选择。
+  (3) TOSICA 处理单细胞独立；Gene2Image 在细胞之上再加 Multi-Head Cell Attention 聚合
+      为 patch 级条件，且下游接整流流图像生成。

@@ -9,4 +9,4 @@ __pycache__/
 # 编辑器配置
 .vscode/
 
-data/
+code/data/

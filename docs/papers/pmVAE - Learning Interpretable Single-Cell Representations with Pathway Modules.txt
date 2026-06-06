@@ -1,0 +1,18 @@
+pmVAE: Learning Interpretable Single-Cell Representations with Pathway Modules
+Venue: bioRxiv 2021 (Gut, Stark, et al.)
+[摘要来源：web_search —— ⚠️ 低置信度：仅摘要，未读全文 PDF]
+
+核心：将通路作为"模块"构建变分自编码器（VAE），每个通路模块学习该通路的活性表示，
+得到可解释的单细胞表示。
+
+关键问题与贡献：
+- 通路高度重叠（overlapping）：很多基因同时参与目标通路与下游/相邻通路，
+  引入冗余，难以严格建模单一通路活性。
+- pmVAE 用模块化结构尝试缓解通路重叠带来的冗余。
+- 对照方法：Interpretable Autoencoder（可找总体通路变化但不处理重叠）、
+  PLIER（通过基因集线性组合聚类通路为单一潜因子，但不严格建模单通路活性）。
+
+与 Gene2Image 的关系：
+- 通路表示学习的经典对照；Gene2Image 须讨论"通路重叠/冗余"如何被
+  可学习 (通路,基因) 权重 + 通路间自注意力所处理。
+- pmVAE 是 VAE 重构目标，Gene2Image 是面向图像生成的条件编码器。

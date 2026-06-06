@@ -25,7 +25,12 @@ logger = logging.getLogger(__name__)
 class NativeScalerWithGradNormCount:
     """Gradient scaling utility for efficient mixed precision training."""
     def __init__(self):
-        self._scaler = torch.amp.GradScaler('cuda')
+        # torch>=2.3 exposes torch.amp.GradScaler('cuda'); torch 2.2.x only has
+        # torch.cuda.amp.GradScaler. Support both.
+        if hasattr(torch.amp, 'GradScaler'):
+            self._scaler = torch.amp.GradScaler('cuda')
+        else:
+            self._scaler = torch.cuda.amp.GradScaler()
         self.grad_norm = 0
 
     def __call__(self, loss, optimizer, parameters, update_grad=True):
@@ -48,6 +53,22 @@ class NativeScalerWithGradNormCount:
 
     def load_state_dict(self, state_dict):
         self._scaler.load_state_dict(state_dict)
+
+
+def compute_l1_penalty(model, is_multi_cell, l1_weight):
+    """Compute the encoder L1 penalty, agnostic to encoder type.
+
+    Pathway and original GeneFlow encoders both expose ``l1_penalty()`` (added in
+    src/pathway_encoder.py, src/single_model.py, src/multi_model.py). The fallback
+    preserves the original hardcoded behaviour for any encoder lacking the method.
+    """
+    enc = model.module.rna_encoder if isinstance(model, DDP) else model.rna_encoder
+    if hasattr(enc, 'l1_penalty'):
+        return enc.l1_penalty() * l1_weight
+    # Legacy fallback (should not be hit now that both encoders define l1_penalty).
+    if is_multi_cell:
+        return torch.sum(torch.abs(enc.cell_encoder[0].weight)) * l1_weight
+    return torch.sum(torch.abs(enc.encoder[0].weight)) * l1_weight
 
 
 def reduce_tensor(tensor, world_size):
@@ -99,6 +120,8 @@ def train_with_rectified_flow(
     spatial_patience=None,
     force_spatial_loss_from_resume=False,
     resumed_checkpoint_state=None,
+    l1_weight=0.001,
+    model_config=None,
 ):
     """
     Train the RNA to H&E cell image generator model with rectified flow, supporting DDP and checkpoint resume.
@@ -319,16 +342,9 @@ def train_with_rectified_flow(
             with torch.amp.autocast('cuda', enabled=use_amp):
                 if is_multi_cell:
                     v_pred = model(x_t, t, gene_expr, num_cells, gene_mask)
-                    if isinstance(model, DDP):
-                        l1_penalty = torch.sum(torch.abs(model.module.rna_encoder.cell_encoder[0].weight)) * 0.001
-                    else:
-                        l1_penalty = torch.sum(torch.abs(model.rna_encoder.cell_encoder[0].weight)) * 0.001
                 else:
                     v_pred = model(x_t, t, gene_expr, gene_mask)
-                    if isinstance(model, DDP):
-                        l1_penalty = torch.sum(torch.abs(model.module.rna_encoder.encoder[0].weight)) * 0.001
-                    else:
-                        l1_penalty = torch.sum(torch.abs(model.rna_encoder.encoder[0].weight)) * 0.001
+                l1_penalty = compute_l1_penalty(model, is_multi_cell, l1_weight)
 
                 base_loss = rectified_flow.loss_fn(v_pred, target_velocity) + l1_penalty
                 
@@ -452,18 +468,9 @@ def train_with_rectified_flow(
                 with torch.amp.autocast('cuda', enabled=use_amp):
                     if is_multi_cell:
                         v_pred = model(x_t, t, gene_expr, num_cells, gene_mask)
-                        # Handle DDP model access
-                        if isinstance(model, DDP):
-                            l1_penalty = torch.sum(torch.abs(model.module.rna_encoder.cell_encoder[0].weight)) * 0.001
-                        else:
-                            l1_penalty = torch.sum(torch.abs(model.rna_encoder.cell_encoder[0].weight)) * 0.001
                     else:
                         v_pred = model(x_t, t, gene_expr, gene_mask)
-                        # Handle DDP model access
-                        if isinstance(model, DDP):
-                            l1_penalty = torch.sum(torch.abs(model.module.rna_encoder.encoder[0].weight)) * 0.001
-                        else:
-                            l1_penalty = torch.sum(torch.abs(model.rna_encoder.encoder[0].weight)) * 0.001
+                    l1_penalty = compute_l1_penalty(model, is_multi_cell, l1_weight)
 
                     base_loss = rectified_flow.loss_fn(v_pred, target_velocity) + l1_penalty
                     
@@ -675,6 +682,10 @@ def train_with_rectified_flow(
                 'spatial_loss_enabled': (spatial_loss_weight_current > 0),
                 'spatial_loss_start_epoch': spatial_loss_actual_start_epoch if spatial_loss_weight_current > 0 else None,
             }
+            # Persist model config so evaluation can rebuild the exact encoder
+            # (including the pathway mask) without re-deriving it from args.
+            if model_config is not None:
+                checkpoint_state['config'] = model_config
             if scaler is not None:
                 checkpoint_state['scaler_state_dict'] = scaler.state_dict()
             

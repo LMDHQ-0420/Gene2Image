@@ -10,3 +10,10 @@ __pycache__/
 .vscode/
 
 code/data/
+# 但保留轻量的通路掩码（构造产物，便于复现）
+!code/data/pathway_masks/
+!code/data/pathway_masks/*.npz
+
+# 训练/评估产物
+code/results/
+code/logs/

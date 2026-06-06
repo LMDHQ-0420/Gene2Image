@@ -77,8 +77,12 @@ def load_uni2_h_model(device, model_path="/depot/natallah/data/Mengbo/HnE_RNA/Ge
         return model, None, transform  # processor=None since we're using timm
         
     except Exception as e:
-        logger.error(f"Failed to load UNI2-h model: {e}")
-        raise RuntimeError(f"UNI2-h model loading failed: {e}. Cannot proceed without UNI2-h.")
+        # UNI2-h is a gated pathology model and an optional metric. Degrade
+        # gracefully: return None so the caller falls back (ResNet / skips the
+        # UNI2-h FID) instead of aborting the whole evaluation.
+        logger.warning(f"UNI2-h model unavailable ({e}); skipping UNI2-h metrics, "
+                       f"basic FID/SSIM/PSNR will still be computed.")
+        return None, None, None
 
 
 def extract_uni2_h_embeddings(images, model, processor=None, preprocess_transform=None, device='cuda'):

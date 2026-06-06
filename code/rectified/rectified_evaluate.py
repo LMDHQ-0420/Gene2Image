@@ -25,8 +25,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rectified.rectified_flow import RectifiedFlow
 from src.utils import setup_parser, parse_adata
-from src.single_model_deprecation import RNAtoHnEModel as RNAtoHnEModel_deprecation
-from src.multi_model_deprecation import MultiCellRNAtoHnEModel as MultiCellRNAtoHnEModel_deprecation
+# Deprecated model classes are no longer shipped; import them only if present so
+# the legacy fallback path still works, but a missing module never breaks eval.
+try:
+    from src.single_model_deprecation import RNAtoHnEModel as RNAtoHnEModel_deprecation
+    from src.multi_model_deprecation import MultiCellRNAtoHnEModel as MultiCellRNAtoHnEModel_deprecation
+except ImportError:
+    RNAtoHnEModel_deprecation = None
+    MultiCellRNAtoHnEModel_deprecation = None
 from src.single_model import RNAtoHnEModel
 from src.multi_model import MultiCellRNAtoHnEModel, prepare_multicell_batch
 from src.dataset import (
@@ -519,6 +525,34 @@ def main():
         relation_rank=model_config_ckpt.get('relation_rank', getattr(args, 'relation_rank', 50)),
     )
 
+    # Pathway encoder support: rebuild the same encoder used at train time.
+    # The mask is restored from the checkpoint config (shape [P, G]) so the model
+    # graph matches the saved state_dict exactly.
+    encoder_type = model_config_ckpt.get('encoder_type', getattr(args, 'encoder_type', 'rna'))
+    if encoder_type == 'pathway':
+        import numpy as _np
+        import torch as _torch
+        pathway_mask_arr = model_config_ckpt.get('pathway_mask_array', None)
+        if pathway_mask_arr is None:
+            # Fall back to loading from the mask file recorded in config / args.
+            mask_path = model_config_ckpt.get('pathway_mask', getattr(args, 'pathway_mask', None))
+            if mask_path is None:
+                raise ValueError("encoder_type='pathway' but no pathway mask available in checkpoint or args.")
+            pathway_mask_arr = _np.load(mask_path)['A']
+        if _torch.is_tensor(pathway_mask_arr):
+            pathway_mask_tensor = pathway_mask_arr.to(_torch.float32)
+        else:
+            pathway_mask_tensor = _torch.tensor(_np.asarray(pathway_mask_arr), dtype=_torch.float32)
+        model_constructor_args.update(dict(
+            encoder_type='pathway',
+            pathway_mask=pathway_mask_tensor,
+            d_token=model_config_ckpt.get('d_token', getattr(args, 'd_token', 48)),
+            pt_layers=model_config_ckpt.get('pt_layers', getattr(args, 'pt_layers', 2)),
+            pt_heads=model_config_ckpt.get('pt_heads', getattr(args, 'pt_heads', 8)),
+            learnable_pathway=model_config_ckpt.get('learnable_pathway', getattr(args, 'learnable_pathway', True)),
+            use_pathway_transformer=model_config_ckpt.get('use_pathway_transformer', getattr(args, 'use_pathway_transformer', True)),
+        ))
+
     model = None
     try:
         if ckpt_model_type == 'single':
@@ -581,8 +615,9 @@ def main():
                     'use_layer_norm': True,
                     'use_gene_relations': True,
                 }))
-            # Try deprecated model
-            constructors_to_try.append(('deprecated', RNAtoHnEModel_deprecation, minimal_constructor_args))
+            # Try deprecated model (only if the legacy module is available)
+            if RNAtoHnEModel_deprecation is not None:
+                constructors_to_try.append(('deprecated', RNAtoHnEModel_deprecation, minimal_constructor_args))
         else:  # multi-cell
             # Try current model with detected features
             if has_gene_relation:
@@ -609,11 +644,12 @@ def main():
                 'use_layer_norm': True,
                 'use_gene_relations': False,
             }))
-            # Try deprecated model
-            constructors_to_try.append(('deprecated', MultiCellRNAtoHnEModel_deprecation, {
-                **minimal_constructor_args,
-                'num_aggregation_heads': 4,
-            }))
+            # Try deprecated model (only if the legacy module is available)
+            if MultiCellRNAtoHnEModel_deprecation is not None:
+                constructors_to_try.append(('deprecated', MultiCellRNAtoHnEModel_deprecation, {
+                    **minimal_constructor_args,
+                    'num_aggregation_heads': 4,
+                }))
         
         # Try each constructor until one works
         for constructor_name, constructor_class, constructor_args in constructors_to_try:
@@ -807,23 +843,27 @@ def main():
             batch_fid = calculate_fid(real_features, gen_features)
             all_batch_fids_list.append(batch_fid)
 
-            # UNI2-h FID calculation
-            uni2h_fid = calculate_uni2h_fid(
-                real_images_tensor, generated_images_tensor,
-                uni2h_model, uni2h_processor, uni2h_preprocess, device
-            )
+            # UNI2-h FID calculation (optional: skipped if model unavailable).
+            if uni2h_model is None:
+                uni2h_fid = np.nan
+                real_uni2h_features = None
+                gen_uni2h_features = None
+            else:
+                uni2h_fid = calculate_uni2h_fid(
+                    real_images_tensor, generated_images_tensor,
+                    uni2h_model, uni2h_processor, uni2h_preprocess, device
+                )
+                # Extract and store UNI2-h features for overall FID calculation
+                real_uni2h_features = extract_uni2_h_embeddings(
+                    real_images_tensor, uni2h_model, uni2h_processor, uni2h_preprocess, device
+                )
+                gen_uni2h_features = extract_uni2_h_embeddings(
+                    generated_images_tensor, uni2h_model, uni2h_processor, uni2h_preprocess, device
+                )
             all_uni2h_fids_list.append(uni2h_fid)
 
-            # Extract and store UNI2-h features for overall FID calculation
-            real_uni2h_features = extract_uni2_h_embeddings(
-                real_images_tensor, uni2h_model, uni2h_processor, uni2h_preprocess, device
-            )
-            gen_uni2h_features = extract_uni2_h_embeddings(
-                generated_images_tensor, uni2h_model, uni2h_processor, uni2h_preprocess, device
-            )
-            
             # Store embeddings with metadata for saving
-            if args.save_embeddings:
+            if args.save_embeddings and uni2h_model is not None:
                 for i in range(current_batch_size):
                     # Real image embeddings
                     real_embedding_entry = {
@@ -845,14 +885,18 @@ def main():
                     }
                     all_gen_embeddings_with_metadata.append(gen_embedding_entry)
 
-            all_real_uni2h_features_for_fid.append(real_uni2h_features)
-            all_gen_uni2h_features_for_fid.append(gen_uni2h_features)
+            if uni2h_model is not None:
+                all_real_uni2h_features_for_fid.append(real_uni2h_features)
+                all_gen_uni2h_features_for_fid.append(gen_uni2h_features)
 
-            # Batch-level biological validation
-            biological_results = extended_biological_evaluation_uni2h(
-                real_images_tensor, generated_images_tensor, 
-                uni2h_model, uni2h_processor, uni2h_preprocess, device
-            )
+            # Batch-level biological validation (UNI2-h dependent; skip if absent)
+            if uni2h_model is not None:
+                biological_results = extended_biological_evaluation_uni2h(
+                    real_images_tensor, generated_images_tensor,
+                    uni2h_model, uni2h_processor, uni2h_preprocess, device
+                )
+            else:
+                biological_results = {}
 
             # Store as batch-level metrics
             batch_biological_metrics = {
@@ -1035,16 +1079,21 @@ def main():
             'use_residual_blocks': use_residual_blocks,
             'use_layer_norm': use_layer_norm,
             'use_gene_relations': use_gene_relations,
+            # Run identity for downstream aggregation (encoder_type, seed, dataset).
+            'encoder_type': model_config_ckpt.get('encoder_type', getattr(args, 'encoder_type', 'rna')),
+            'pathway_db': model_config_ckpt.get('pathway_db', getattr(args, 'pathway_db', None)),
+            'seed': getattr(args, 'seed', None),
         }
-        
+
         # Add biological metrics to results summary
         results_summary.update(biological_summary)
         results_summary.update(rna_summary)
 
-        # Save UNI2-h embeddings for UMAP analysis
-        if args.save_embeddings:
+        # Save UNI2-h embeddings for UMAP analysis (only if any were collected;
+        # they are empty when UNI2-h is unavailable).
+        if args.save_embeddings and (all_real_embeddings_with_metadata or all_gen_embeddings_with_metadata):
             logger.info("Saving UNI2-h embeddings for UMAP analysis...")
-            
+
             embeddings_dir = args.embeddings_output_path if args.embeddings_output_path else os.path.join(args.output_dir, 'embeddings')
             os.makedirs(embeddings_dir, exist_ok=True)
             

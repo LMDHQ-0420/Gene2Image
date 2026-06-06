@@ -260,6 +260,14 @@ class MultiCellRNAEncoder(nn.Module):
         else:
             return torch.ones(self.input_dim, device=next(self.parameters()).device) / self.input_dim
 
+    def l1_penalty(self):
+        """L1 over the cell encoder's first linear layer weight.
+
+        Matches the original hardcoded penalty in rectified_train.py so the
+        training loop can call enc.l1_penalty() uniformly across encoder types.
+        """
+        return torch.sum(torch.abs(self.cell_encoder[0].weight))
+
 class MultiCellRNAtoHnEModel(nn.Module):
     """
     Model for generating H&E patch images from multiple cells' RNA expression data
@@ -294,32 +302,61 @@ class MultiCellRNAtoHnEModel(nn.Module):
         use_multi_head_attention=True,
         use_feature_gating=True,
         use_residual_blocks=True,
-        use_layer_norm=True
+        use_layer_norm=True,
+        # Pathway encoder (Gene2Image). encoder_type='rna' keeps GeneFlow behaviour.
+        encoder_type='rna',
+        pathway_mask=None,
+        d_token=48,
+        pt_layers=2,
+        pt_heads=8,
+        learnable_pathway=True,
+        use_pathway_transformer=True,
+        pathway_init_weight=None,
     ):
         super().__init__()
 
         self.rna_dim = rna_dim
         self.img_channels = img_channels
         self.img_size = img_size
+        self.encoder_type = encoder_type
 
         rna_encoder_output_dim = model_channels * encoder_output_dim_multiplier
 
-        # Multi-cell RNA expression encoder
-        self.rna_encoder = MultiCellRNAEncoder(
-            input_dim=rna_dim,
-            hidden_dims=encoder_hidden_dims,
-            output_dim=rna_encoder_output_dim,
-            concat_mask=concat_mask,
-            dropout=dropout,
-            use_gene_relations=use_gene_relations,
-            relation_rank=relation_rank,
-            num_aggregation_heads=num_aggregation_heads,
-            use_gene_attention=use_gene_attention,
-            use_multi_head_attention=use_multi_head_attention,
-            use_feature_gating=use_feature_gating,
-            use_residual_blocks=use_residual_blocks,
-            use_layer_norm=use_layer_norm
-        )
+        # Multi-cell RNA expression encoder. Both branches output
+        # rna_encoder_output_dim (=512), keeping the UNet interface identical.
+        if encoder_type == 'pathway':
+            from src.pathway_encoder import PathwayMultiEncoder
+            if pathway_mask is None:
+                raise ValueError("encoder_type='pathway' requires pathway_mask [P, G].")
+            self.rna_encoder = PathwayMultiEncoder(
+                mask=pathway_mask,
+                output_dim=rna_encoder_output_dim,
+                d_token=d_token,
+                n_layers=pt_layers,
+                n_heads=pt_heads,
+                dropout=dropout,
+                learnable=learnable_pathway,
+                use_transformer=use_pathway_transformer,
+                init_weight=pathway_init_weight,
+                num_aggregation_heads=num_aggregation_heads,
+                use_layer_norm=use_layer_norm,
+            )
+        else:
+            self.rna_encoder = MultiCellRNAEncoder(
+                input_dim=rna_dim,
+                hidden_dims=encoder_hidden_dims,
+                output_dim=rna_encoder_output_dim,
+                concat_mask=concat_mask,
+                dropout=dropout,
+                use_gene_relations=use_gene_relations,
+                relation_rank=relation_rank,
+                num_aggregation_heads=num_aggregation_heads,
+                use_gene_attention=use_gene_attention,
+                use_multi_head_attention=use_multi_head_attention,
+                use_feature_gating=use_feature_gating,
+                use_residual_blocks=use_residual_blocks,
+                use_layer_norm=use_layer_norm
+            )
 
         # UNet model for flow matching
         self.unet = RNAConditionedUNet(

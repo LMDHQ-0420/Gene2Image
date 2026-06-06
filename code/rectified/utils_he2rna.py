@@ -7,13 +7,24 @@ import torch.nn.functional as F
 from torchvision.models import resnet50
 from einops import rearrange
 import safetensors.torch
-from sequoia.src.he2rna import HE2RNA
 
 logger = logging.getLogger(__name__)
 
+# HE2RNA (RNA round-trip metric) needs the external 'sequoia' package + gated
+# weights. It is optional: import lazily so basic FID/SSIM/PSNR evaluation works
+# without sequoia installed. The RNA round-trip metric is simply skipped if absent.
+try:
+    from sequoia.src.he2rna import HE2RNA
+except ImportError:
+    HE2RNA = None
+
+
 def load_he2rna_model(model_path, device):
     """Load pretrained HE2RNA model from safetensors format"""
-    try:        
+    if HE2RNA is None:
+        logger.warning("sequoia/HE2RNA not installed; RNA round-trip metric unavailable.")
+        return None
+    try:
         # Check if it's a HuggingFace model directory with safetensors
         if os.path.isdir(model_path):
             safetensors_path = os.path.join(model_path, "model.safetensors")

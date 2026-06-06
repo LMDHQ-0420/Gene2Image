@@ -232,8 +232,34 @@ def setup_parser(parser=None):
                            help='Concatenate mask to the input of the RNA encoder')
     arch_group.add_argument('--relation_rank', type=int, default=50, 
                            help='Rank K for low-rank factorization in gene relation network (default: 50)')
-    arch_group.add_argument('--num_aggregation_heads', type=int, default=4, 
+    arch_group.add_argument('--num_aggregation_heads', type=int, default=4,
                            help='Number of heads for cell aggregation in MultiCellRNAEncoder (multi-cell only, default: 4)')
+
+    # Pathway encoder (Gene2Image). Default encoder_type='rna' = original GeneFlow.
+    pathway_group = parser.add_argument_group('Pathway Encoder')
+    pathway_group.add_argument('--encoder_type', type=str, choices=['rna', 'pathway'], default='rna',
+                               help="RNA encoder type: 'rna'=GeneFlow baseline, 'pathway'=Gene2Image")
+    pathway_group.add_argument('--pathway_mask', type=str, default=None,
+                               help='Path to pathway mask .npz (real/rand/none variant)')
+    pathway_group.add_argument('--pathway_db', type=str, default='hallmark',
+                               choices=['hallmark', 'hallmark_reactome'],
+                               help='Pathway database used to build the mask (recorded in config)')
+    pathway_group.add_argument('--d_token', type=int, default=48,
+                               help='Per-pathway token dimension (default: 48)')
+    pathway_group.add_argument('--pt_layers', type=int, default=2,
+                               help='Pathway Transformer layers (default: 2)')
+    pathway_group.add_argument('--pt_heads', type=int, default=8,
+                               help='Pathway Transformer attention heads (default: 8)')
+    pathway_group.add_argument('--learnable_pathway', action='store_true', default=True,
+                               help='Learnable (pathway, gene) weights (Gene2Image)')
+    pathway_group.add_argument('--no_learnable_pathway', dest='learnable_pathway', action='store_false',
+                               help='Freeze (pathway, gene) weights -> PathPrior (RQ3)')
+    pathway_group.add_argument('--use_pathway_transformer', action='store_true', default=True,
+                               help='Use Pathway Transformer (pathway co-regulation)')
+    pathway_group.add_argument('--no_pathway_transformer', dest='use_pathway_transformer', action='store_false',
+                               help='Remove Pathway Transformer -> noTrans ablation')
+    pathway_group.add_argument('--l1_weight', type=float, default=0.001,
+                               help='Weight for L1 penalty on encoder first-layer/pathway weights')
 
     model_group = parser.add_argument_group('Model Configuration')
     model_group.add_argument('--model_type', type=str, choices=['single', 'multi'], default='multi',

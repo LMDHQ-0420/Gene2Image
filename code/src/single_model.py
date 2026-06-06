@@ -205,6 +205,14 @@ class RNAEncoder(nn.Module):
         else:
             return torch.ones(self.input_dim) / self.input_dim  # Uniform importance if no attention
 
+    def l1_penalty(self):
+        """L1 over the encoder's first linear layer weight.
+
+        Matches the original hardcoded penalty in rectified_train.py so the
+        training loop can call enc.l1_penalty() uniformly across encoder types.
+        """
+        return torch.sum(torch.abs(self.encoder[0].weight))
+
 class RNAtoHnEModel(nn.Module):
     """
     Complete model for generating H&E cell images from RNA expression data
@@ -235,27 +243,54 @@ class RNAtoHnEModel(nn.Module):
         use_residual_blocks=True,
         use_layer_norm=True,
         use_gene_relations=True,
+        # Pathway encoder (Gene2Image). encoder_type='rna' keeps GeneFlow behaviour.
+        encoder_type='rna',
+        pathway_mask=None,
+        d_token=48,
+        pt_layers=2,
+        pt_heads=8,
+        learnable_pathway=True,
+        use_pathway_transformer=True,
+        pathway_init_weight=None,
     ):
         super().__init__()
-        
+
         self.rna_dim = rna_dim
         self.img_channels = img_channels
         self.img_size = img_size
+        self.encoder_type = encoder_type
 
-        # RNA expression encoder with ablation support
-        self.rna_encoder = RNAEncoder(
-            input_dim=rna_dim,
-            hidden_dims=[512, 256],
-            output_dim=model_channels * 4,  # Match time_embed_dim
-            concat_mask=concat_mask,
-            relation_rank=relation_rank,
-            use_gene_attention=use_gene_attention,
-            use_multi_head_attention=use_multi_head_attention,
-            use_feature_gating=use_feature_gating,
-            use_residual_blocks=use_residual_blocks,
-            use_layer_norm=use_layer_norm,
-            use_gene_relations=use_gene_relations,
-        )
+        # RNA expression encoder. Both branches output [B, model_channels*4]=512,
+        # so the UNet interface is identical and any quality delta is attributable
+        # solely to the encoder.
+        if encoder_type == 'pathway':
+            from src.pathway_encoder import PathwaySingleEncoder
+            if pathway_mask is None:
+                raise ValueError("encoder_type='pathway' requires pathway_mask [P, G].")
+            self.rna_encoder = PathwaySingleEncoder(
+                mask=pathway_mask,
+                output_dim=model_channels * 4,
+                d_token=d_token,
+                n_layers=pt_layers,
+                n_heads=pt_heads,
+                learnable=learnable_pathway,
+                use_transformer=use_pathway_transformer,
+                init_weight=pathway_init_weight,
+            )
+        else:
+            self.rna_encoder = RNAEncoder(
+                input_dim=rna_dim,
+                hidden_dims=[512, 256],
+                output_dim=model_channels * 4,  # Match time_embed_dim
+                concat_mask=concat_mask,
+                relation_rank=relation_rank,
+                use_gene_attention=use_gene_attention,
+                use_multi_head_attention=use_multi_head_attention,
+                use_feature_gating=use_feature_gating,
+                use_residual_blocks=use_residual_blocks,
+                use_layer_norm=use_layer_norm,
+                use_gene_relations=use_gene_relations,
+            )
         
         # UNet model for flow matching (unchanged)
         self.unet = RNAConditionedUNet(

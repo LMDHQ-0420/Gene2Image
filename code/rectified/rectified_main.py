@@ -376,9 +376,41 @@ def main():
 
     if gene_dim is None:
         raise ValueError("Could not determine gene dimension. Ensure dataset has gene_names attribute.")
-    
+
     if rank == 0:
         logger.info(f"Gene dimension: {gene_dim}")
+
+    # Pathway encoder: load the fixed mask (and optional frozen ssGSEA weights for
+    # PathPrior). The mask column count MUST equal gene_dim, otherwise the mask is
+    # misaligned to dataset.gene_names and every pathway token is silently wrong.
+    pathway_mask_tensor = None
+    pathway_init_weight = None
+    pathway_names = None
+    if args.encoder_type == 'pathway':
+        if args.pathway_mask is None:
+            raise ValueError("--encoder_type pathway requires --pathway_mask <path.npz>")
+        mask_npz = np.load(args.pathway_mask, allow_pickle=True)
+        A = mask_npz['A']
+        if 'pathway_names' in mask_npz.files:
+            pathway_names = [str(p) for p in mask_npz['pathway_names']]
+        if A.shape[1] != gene_dim:
+            raise ValueError(
+                f"Pathway mask gene count {A.shape[1]} != dataset gene_dim {gene_dim}. "
+                f"The mask in {args.pathway_mask} was built for a different panel; "
+                f"rebuild it with scripts/build_pathway_mask.py for this dataset.")
+        pathway_mask_tensor = torch.tensor(A, dtype=torch.float32)
+        if rank == 0:
+            logger.info(f"Loaded pathway mask {A.shape} from {args.pathway_mask} "
+                        f"(P={A.shape[0]} pathways, {int(A.sum())} edges)")
+        # PathPrior: freeze weights, initialise from ssGSEA-derived fixed weights.
+        if not args.learnable_pathway:
+            if 'W_ssgsea' in mask_npz.files:
+                pathway_init_weight = torch.tensor(mask_npz['W_ssgsea'], dtype=torch.float32)
+                if rank == 0:
+                    logger.info("PathPrior: loaded frozen W_ssgsea weights")
+            elif rank == 0:
+                logger.warning("--no_learnable_pathway but mask has no W_ssgsea; "
+                               "weights frozen at default init.")
 
     model_constructor_args = dict(
         rna_dim=gene_dim,
@@ -402,6 +434,15 @@ def main():
         use_residual_blocks=args.use_residual_blocks,
         use_layer_norm=args.use_layer_norm,
         use_gene_relations=args.use_gene_relations,
+        # Pathway encoder params (ignored when encoder_type='rna')
+        encoder_type=args.encoder_type,
+        pathway_mask=pathway_mask_tensor,
+        d_token=args.d_token,
+        pt_layers=args.pt_layers,
+        pt_heads=args.pt_heads,
+        learnable_pathway=args.learnable_pathway,
+        use_pathway_transformer=args.use_pathway_transformer,
+        pathway_init_weight=pathway_init_weight,
     )
 
     if args.model_type == 'single':
@@ -599,6 +640,26 @@ def main():
             no_wandb=args.no_wandb,
             log_interval_pct=args.log_interval_pct,
             max_checkpoints=args.max_checkpoints,
+            l1_weight=args.l1_weight,
+            model_config={
+                'model_type': args.model_type,
+                'img_channels': args.img_channels,
+                'img_size': args.img_size,
+                'encoder_type': args.encoder_type,
+                'pathway_db': args.pathway_db,
+                'pathway_mask': args.pathway_mask,
+                # Store as a torch tensor (not numpy) so checkpoints remain
+                # loadable with torch.load(weights_only=True).
+                'pathway_mask_array': (pathway_mask_tensor.cpu()
+                                       if pathway_mask_tensor is not None else None),
+                'd_token': args.d_token,
+                'pt_layers': args.pt_layers,
+                'pt_heads': args.pt_heads,
+                'learnable_pathway': args.learnable_pathway,
+                'use_pathway_transformer': args.use_pathway_transformer,
+                'num_aggregation_heads': args.num_aggregation_heads,
+                'pathway_names': pathway_names,
+            },
             use_spatial_loss=args.use_spatial_loss,
             spatial_loss_method=args.spatial_loss_method,
             spatial_loss_weight=args.spatial_loss_weight,
